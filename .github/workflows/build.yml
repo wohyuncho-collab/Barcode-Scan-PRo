@@ -1,4 +1,4 @@
-name: Build BarcodeScan APK
+name: Build LabelScan PRO APK
 
 on:
   push:
@@ -31,7 +31,7 @@ jobs:
         run: |
           npm init -y
           npm install @capacitor/core @capacitor/android
-          npx cap init BarcodeScan com.barcodescan.pro --web-dir=www
+          npx cap init "LabelScan PRO" com.labelscan.pro --web-dir=www
           npx cap add android
 
       - name: Copy web assets
@@ -46,7 +46,6 @@ jobs:
       - name: Copy icons (if exists)
         run: |
           if [ -f "icons/icon-512.png" ]; then
-            echo "Copying icons..."
             for dir in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
               mkdir -p android/app/src/main/res/mipmap-$dir
               cp icons/icon-192.png android/app/src/main/res/mipmap-$dir/ic_launcher.png 2>/dev/null || cp icons/icon-512.png android/app/src/main/res/mipmap-$dir/ic_launcher.png
@@ -55,9 +54,6 @@ jobs:
             mkdir -p android/app/src/main/res/mipmap-xxxhdpi
             cp icons/icon-512.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
             cp icons/icon-512.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
-            echo "Icons copied"
-          else
-            echo "No icons folder found, using default icon"
           fi
 
       - name: Build Debug APK
@@ -69,6 +65,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: BarcodeScan-APK
+          name: LabelScan-PRO-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
