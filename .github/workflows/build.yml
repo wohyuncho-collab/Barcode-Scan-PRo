@@ -1,60 +1,71 @@
-name: Build APK
+name: Build BarcodeScan APK
+
 on:
-  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [ main, master ]
+  workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
         with:
           node-version: 20
-      - uses: actions/setup-java@v4
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: 17
-      - run: npm install
-      - run: npm install html5-qrcode@2.3.8 --no-save
-      - name: 스캐너 라이브러리를 앱에 포함 (오프라인 동작)
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Install Capacitor
+        run: npm install -g @capacitor/cli
+
+      - name: Init Android Project
         run: |
-          cp node_modules/html5-qrcode/html5-qrcode.min.js www/
-          ls -l www
-      - name: 앱 이름을 Barcode Scan PRO으로
+          npm init -y
+          npm install @capacitor/core @capacitor/android @capacitor-community/barcode-scanner
+          npx cap init BarcodeScan --web-dir=. --package-id=com.barcodescan.pro
+          npx cap add android
+
+      - name: Copy web assets
         run: |
-          sed -i 's/"appName": *"[^"]*"/"appName": "Barcode Scan PRO"/' capacitor.config.json
-          cat capacitor.config.json
-      - run: npx cap add android
-      - run: cp -r icons/. android/app/src/main/res/
-      - name: 카메라·진동 권한 추가
+          mkdir -p android/app/src/main/assets/public
+          cp index.html android/app/src/main/assets/public/
+          # index.html은 단일 파일 버전 (CDN으로 html5-qrcode 로드)
+
+      - name: Copy icons (if exists)
         run: |
-          sed -i 's#<application#<uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <application#' android/app/src/main/AndroidManifest.xml
-          grep -n -E "CAMERA|VIBRATE" android/app/src/main/AndroidManifest.xml
-      - name: 1단계 - 전체 기능 빌드 (고속 스캐너·햅틱·세로 고정·화면 유지)
-        id: s1
-        continue-on-error: true
+          if [ -f "icons/icon-512.png" ]; then
+            echo "Copying icons..."
+            for dir in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+              mkdir -p android/app/src/main/res/mipmap-$dir
+              cp icons/icon-192.png android/app/src/main/res/mipmap-$dir/ic_launcher.png 2>/dev/null || cp icons/icon-512.png android/app/src/main/res/mipmap-$dir/ic_launcher.png
+              cp icons/icon-192.png android/app/src/main/res/mipmap-$dir/ic_launcher_round.png 2>/dev/null || cp icons/icon-512.png android/app/src/main/res/mipmap-$dir/ic_launcher_round.png
+            done
+            mkdir -p android/app/src/main/res/mipmap-xxxhdpi
+            cp icons/icon-512.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+            cp icons/icon-512.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+            echo "Icons copied"
+          else
+            echo "No icons folder found, using default icon"
+          fi
+
+      - name: Build Debug APK
         run: |
-          npm install @capacitor-mlkit/barcode-scanning@6 @capacitor/haptics@6 @capacitor/screen-orientation@6 @capacitor-community/keep-awake@5.0.1
-          npx cap sync android
-          cd android && chmod +x gradlew && ./gradlew assembleDebug
-      - name: 2단계 - 고속 스캐너 제외하고 다시 빌드
-        id: s2
-        if: steps.s1.outcome == 'failure'
-        continue-on-error: true
-        run: |
-          npm uninstall @capacitor-mlkit/barcode-scanning
-          npx cap sync android
-          cd android && chmod +x gradlew && ./gradlew clean assembleDebug
-      - name: 3단계 - 기본 기능만으로 다시 빌드
-        if: steps.s2.outcome == 'failure'
-        run: |
-          npm uninstall @capacitor/haptics @capacitor/screen-orientation @capacitor-community/keep-awake
-          npx cap sync android
-          cd android && chmod +x gradlew && ./gradlew clean assembleDebug
-      - name: APK 이름 바꾸기
-        run: mv android/app/build/outputs/apk/debug/app-debug.apk android/app/build/outputs/apk/debug/Barcode_Scan_PRO.apk
-      - uses: actions/upload-artifact@v4
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
-          name: barcode-cam-apk
-          path: android/app/build/outputs/apk/debug/Barcode_Scan_PRO.apk
+          name: BarcodeScan-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
