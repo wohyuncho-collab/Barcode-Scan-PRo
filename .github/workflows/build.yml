@@ -1,82 +1,223 @@
-name: Build LabelScan PRO APK
+name: Build LabelScan PRO Dual Scanner APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 40
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Setup Node.js 22
+      - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 22
 
-      - name: Setup Java 21
+      - name: Set up Java
         uses: actions/setup-java@v5
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '21'
 
-      - name: Install Capacitor + ML Kit (Google)
+      - name: Prepare web assets and dependencies
+        shell: bash
         run: |
-          npm install -g @capacitor/cli
-          npm init -y
-          npm install @capacitor/core @capacitor/android @capacitor-mlkit/barcode-scanning @capacitor/filesystem @capacitor/share
-          npx cap init "LabelScan PRO" com.labelscan.pro --web-dir=www
-          npx cap add android
-          echo "=== ML Kit installed ==="
-          cat package.json | grep mlkit || true
-
-      - name: Copy web assets
-        run: |
+          set -euo pipefail
           mkdir -p www
-          mkdir -p android/app/src/main/assets/public
-          cp index.html www/index.html
-          cp index.html android/app/src/main/assets/public/index.html
-          npx cap copy android || true
-          npx cap sync android || true
-
-      - name: Copy icons (force orange)
-        run: |
-          if [ -f "icons/icon-512.png" ]; then
-            for dir in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
-              mkdir -p android/app/src/main/res/mipmap-$dir
-              cp -f icons/icon-512.png android/app/src/main/res/mipmap-$dir/ic_launcher.png
-              cp -f icons/icon-512.png android/app/src/main/res/mipmap-$dir/ic_launcher_round.png
-              cp -f icons/icon-512.png android/app/src/main/res/mipmap-$dir/ic_launcher_foreground.png 2>/dev/null || true
-            done
-            rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml 2>/dev/null || true
-            rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml 2>/dev/null || true
-            echo "Icons forced"
+          if [ -f "index.html" ]; then
+            cp index.html www/index.html
           else
-            echo "No icons - using default"
+            HTML_FILE="$(find . -maxdepth 1 -type f -name '*.html' -print -quit)"
+            if [ -z "$HTML_FILE" ]; then
+              echo "ERROR: Put the app HTML in the repository root as index.html." >&2
+              exit 1
+            fi
+            cp "$HTML_FILE" www/index.html
           fi
+          test -s www/index.html
+          if [ ! -f package.json ]; then npm init -y; fi
+          npm install @capacitor/core@7 @capacitor/android@7 @capacitor/cli@7 esbuild
 
-      - name: Add Camera permission
+      - name: Configure Capacitor Android
+        shell: bash
         run: |
-          MANIFEST=android/app/src/main/AndroidManifest.xml
-          if ! grep -q "android.permission.CAMERA" "$MANIFEST"; then
-            sed -i '/<manifest/a \    <uses-permission android:name="android.permission.CAMERA" />' "$MANIFEST"
-            sed -i '/<manifest/a \    <uses-feature android:name="android.hardware.camera" android:required="false" />' "$MANIFEST"
+          set -euo pipefail
+          if [ ! -f capacitor.config.json ] && [ ! -f capacitor.config.ts ]; then
+            npx cap init "LabelScan PRO" com.labelscan.pro --web-dir=www
           fi
-          cat $MANIFEST | grep -i camera || true
+          if [ ! -d android ]; then npx cap add android; fi
+          npx cap sync android
 
-      - name: Build Debug APK
+      - name: Install LabelScan PRO launcher icons
+        shell: bash
         run: |
+          set -euo pipefail
+          if [ ! -d android-res ]; then
+            echo "ERROR: android-res launcher icon assets are missing." >&2
+            exit 1
+          fi
+          cp -R android-res/. android/app/src/main/res/
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          python3 - "$MANIFEST" <<'PYICON'
+          from pathlib import Path
+          import re, sys
+          p = Path(sys.argv[1])
+          s = p.read_text()
+          m = re.search(r'<application\b[^>]*>', s, re.S)
+          if not m:
+              raise SystemExit('Android application tag not found while setting launcher icon')
+          tag = m.group(0)
+          def set_attr(tag, name, value):
+              pat = re.compile(r'\b' + re.escape(name) + r'\s*=\s*"[^"]*"')
+              if pat.search(tag):
+                  return pat.sub(name + '="' + value + '"', tag, count=1)
+              return tag[:-1] + ' ' + name + '="' + value + '">'
+          tag = set_attr(tag, 'android:icon', '@mipmap/ic_launcher')
+          tag = set_attr(tag, 'android:roundIcon', '@mipmap/ic_launcher_round')
+          tag = set_attr(tag, 'android:label', 'LabelScan PRO')
+          s = s[:m.start()] + tag + s[m.end():]
+          p.write_text(s)
+          PYICON
+          test -s android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+          test -s android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+
+      - name: Bundle dual-scanner bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx esbuild src/dual-scanner-bridge.js --bundle --format=esm --platform=browser --target=es2022 --outfile=www/dual-scanner-bridge.js
+          test -s www/dual-scanner-bridge.js
+          npx cap copy android
+
+      - name: Install native ML Kit + ZXing dual scanner
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_ID="$(node - <<'NODE'
+          try {
+            const fs = require('fs');
+            if (fs.existsSync('capacitor.config.json')) {
+              const c = JSON.parse(fs.readFileSync('capacitor.config.json', 'utf8'));
+              console.log(c.appId || 'com.labelscan.pro');
+            } else {
+              console.log('com.labelscan.pro');
+            }
+          } catch (_) { console.log('com.labelscan.pro'); }
+          NODE
+          )"
+          PKG_PATH="$(printf '%s' "$APP_ID" | tr '.' '/')"
+          JAVA_DIR="android/app/src/main/java/$PKG_PATH"
+          mkdir -p "$JAVA_DIR"
+          sed "s/^package com\.labelscan\.pro;/package $APP_ID;/" native/DualScannerPlugin.java > "$JAVA_DIR/DualScannerPlugin.java"
+          sed "s/^package com\.labelscan\.pro;/package $APP_ID;/" native/DualScannerActivity.java > "$JAVA_DIR/DualScannerActivity.java"
+
+          MAIN_ACTIVITY="$(find android/app/src/main/java -name MainActivity.java -print -quit)"
+          if [ -z "$MAIN_ACTIVITY" ]; then
+            echo "ERROR: Capacitor MainActivity.java was not found." >&2
+            exit 1
+          fi
+          python3 - "$MAIN_ACTIVITY" <<'PY'
+          import pathlib, re, sys
+          p = pathlib.Path(sys.argv[1])
+          s = p.read_text()
+          if 'registerPlugin(DualScannerPlugin.class)' not in s:
+              if 'import android.os.Bundle;' not in s:
+                  s = s.replace('import com.getcapacitor.BridgeActivity;', 'import android.os.Bundle;\nimport com.getcapacitor.BridgeActivity;')
+              match = re.search(r'public class MainActivity extends BridgeActivity\s*\{', s)
+              if not match:
+                  raise SystemExit('Could not patch MainActivity registration safely')
+              body = '''public class MainActivity extends BridgeActivity {
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  registerPlugin(DualScannerPlugin.class);
+                  super.onCreate(savedInstanceState);
+              }
+          '''
+              s = s[:match.start()] + body + s[match.end():]
+          p.write_text(s)
+          PY
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          gradle = Path('android/app/build.gradle')
+          if not gradle.exists():
+              raise SystemExit('android/app/build.gradle not found (expected Groovy Gradle project)')
+          s = gradle.read_text()
+          deps = [
+            "implementation 'androidx.activity:activity:1.10.1'",
+            "implementation 'androidx.camera:camera-core:1.4.2'",
+            "implementation 'androidx.camera:camera-camera2:1.4.2'",
+            "implementation 'androidx.camera:camera-lifecycle:1.4.2'",
+            "implementation 'androidx.camera:camera-view:1.4.2'",
+            "implementation 'com.google.mlkit:barcode-scanning:17.3.0'",
+            "implementation 'com.google.zxing:core:3.5.3'",
+          ]
+          missing = [d for d in deps if d not in s]
+          if missing:
+            m = re.search(r'dependencies\s*\{', s)
+            if not m: raise SystemExit('Gradle dependencies block not found')
+            pos = m.end()
+            s = s[:pos] + '\n    ' + '\n    '.join(missing) + '\n' + s[pos:]
+          gradle.write_text(s)
+          PY
+
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          python3 - "$MANIFEST" "$APP_ID" <<'PY'
+          from pathlib import Path
+          import re, sys
+          p = Path(sys.argv[1]); app_id = sys.argv[2]
+          s = p.read_text()
+          root = re.search(r'<manifest\b[^>]*>', s, re.S)
+          if not root: raise SystemExit('Android manifest root tag not found')
+          additions = []
+          if 'android.permission.CAMERA' not in s:
+              additions.append('<uses-permission android:name="android.permission.CAMERA" />')
+          if 'android.hardware.camera' not in s:
+              additions.append('<uses-feature android:name="android.hardware.camera" android:required="false" />')
+          if additions:
+              s = s[:root.end()] + '\n    ' + '\n    '.join(additions) + s[root.end():]
+          if 'DualScannerActivity' not in s:
+              app = re.search(r'<application\b[^>]*>', s, re.S)
+              if not app: raise SystemExit('Android application tag not found')
+              activity = f'\n        <activity android:name="{app_id}.DualScannerActivity" android:exported="false" android:screenOrientation="fullSensor" android:theme="@android:style/Theme.Material.Light.NoActionBar" />'
+              s = s[:app.end()] + activity + s[app.end():]
+          p.write_text(s)
+          PY
+
+      - name: Verify native scanner sources and dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'com.google.mlkit:barcode-scanning:17.3.0' android/app/build.gradle
+          grep -q 'com.google.zxing:core:3.5.3' android/app/build.gradle
+          grep -q 'DualScannerPlugin.class' "$(find android/app/src/main/java -name MainActivity.java -print -quit)"
+          grep -q 'DualScannerActivity' android/app/src/main/AndroidManifest.xml
+          grep -q 'android:icon="@mipmap/ic_launcher"' android/app/src/main/AndroidManifest.xml
+          test -s android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          test -s android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+          test -s www/dual-scanner-bridge.js
+
+      - name: Build debug APK (bundled offline engines)
+        shell: bash
+        run: |
+          set -euo pipefail
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          ./gradlew --no-daemon assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v5
         with:
-          name: LabelScan-PRO-APK
+          name: LabelScan-PRO-DualScanner-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 30
+          if-no-files-found: error
+          retention-days: 14
