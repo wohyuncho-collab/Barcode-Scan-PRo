@@ -1,79 +1,46 @@
 name: Build LabelScan PRO APK
-
-on:
-  push:
-    branches: [ main, master ]
-  workflow_dispatch:
-
+on: [push, workflow_dispatch]
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v5
-        with:
-          node-version: 22
-
-      - name: Setup Java 21
-        uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-
-      - name: Install Capacitor
-        run: npm install -g @capacitor/cli
-
-      - name: Init Android Project
-        run: |
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 22 }
+      - uses: actions/setup-java@v5
+        with: { distribution: 'temurin', java-version: '21' }
+      - run: npm install -g @capacitor/cli
+      - run: |
           npm init -y
           npm install @capacitor/core @capacitor/android
           npx cap init "LabelScan PRO" com.labelscan.pro --web-dir=www
           npx cap add android
-
-      - name: Copy web assets
-        run: |
-          mkdir -p www
-          cp index.html www/index.html
+      - run: |
+          mkdir -p www && cp index.html www/index.html
           npx cap copy android || true
-
       - name: Copy icons (force)
         run: |
-          echo "=== Checking icons folder ==="
           ls -R icons
           if [ -f "icons/icon-512.png" ]; then
             for dir in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
               mkdir -p android/app/src/main/res/mipmap-$dir
               cp -f icons/icon-512.png android/app/src/main/res/mipmap-$dir/ic_launcher.png
               cp -f icons/icon-512.png android/app/src/main/res/mipmap-$dir/ic_launcher_round.png
-              cp -f icons/icon-512.png android/app/src/main/res/mipmap-$dir/ic_launcher_foreground.png 2>/dev/null || true
             done
             rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
-            rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
           else
-            echo "ERROR: icons/icon-512.png not found!"
-            find . -name "*.png"
-            exit 1
+            echo "icons/icon-512.png not found!"; exit 1
           fi
-
       - name: Add Camera permission
         run: |
           MANIFEST=android/app/src/main/AndroidManifest.xml
-          if ! grep -q "android.permission.CAMERA" "$MANIFEST"; then
+          if ! grep -q "CAMERA" "$MANIFEST"; then
             sed -i '/<manifest/a \    <uses-permission android:name="android.permission.CAMERA" />' "$MANIFEST"
           fi
-
-      - name: Build Debug APK
-        run: |
-          cd android
-          chmod +x gradlew
+      - run: |
+          cd android && chmod +x gradlew
           ./gradlew assembleDebug
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: LabelScan-PRO-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/debug/LabelScan-PRO.apk
