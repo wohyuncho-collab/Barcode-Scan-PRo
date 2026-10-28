@@ -37,54 +37,43 @@ jobs:
       - name: Copy web assets
         run: |
           mkdir -p www
-          mkdir -p android/app/src/main/assets/public
           cp index.html www/index.html
-          cp index.html android/app/src/main/assets/public/index.html
           npx cap copy android || true
-          npx cap sync android || true
 
-      - name: Copy icons (if exists)
+      - name: Copy icons (force)
         run: |
+          echo "=== Checking icons folder ==="
+          ls -R icons
           if [ -f "icons/icon-512.png" ]; then
-            echo "Copying icons..."
             for dir in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
               mkdir -p android/app/src/main/res/mipmap-$dir
-              cp icons/icon-192.png android/app/src/main/res/mipmap-$dir/ic_launcher.png 2>/dev/null || cp icons/icon-512.png android/app/src/main/res/mipmap-$dir/ic_launcher.png
-              cp icons/icon-192.png android/app/src/main/res/mipmap-$dir/ic_launcher_round.png 2>/dev/null || cp icons/icon-512.png android/app/src/main/res/mipmap-$dir/ic_launcher_round.png
+              cp -f icons/icon-512.png android/app/src/main/res/mipmap-$dir/ic_launcher.png
+              cp -f icons/icon-512.png android/app/src/main/res/mipmap-$dir/ic_launcher_round.png
+              cp -f icons/icon-512.png android/app/src/main/res/mipmap-$dir/ic_launcher_foreground.png 2>/dev/null || true
             done
-            mkdir -p android/app/src/main/res/mipmap-xxxhdpi
-            cp icons/icon-512.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
-            cp icons/icon-512.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
-            echo "Icons copied"
+            rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+            rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
           else
-            echo "No icons folder found, using default icon"
+            echo "ERROR: icons/icon-512.png not found!"
+            find . -name "*.png"
+            exit 1
           fi
 
       - name: Add Camera permission
         run: |
           MANIFEST=android/app/src/main/AndroidManifest.xml
-          echo "=== Before ==="
-          cat $MANIFEST | grep -i permission || true
           if ! grep -q "android.permission.CAMERA" "$MANIFEST"; then
-            echo "Adding CAMERA permission..."
             sed -i '/<manifest/a \    <uses-permission android:name="android.permission.CAMERA" />' "$MANIFEST"
-            sed -i '/<manifest/a \    <uses-feature android:name="android.hardware.camera" android:required="false" />' "$MANIFEST"
-            sed -i '/<manifest/a \    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />' "$MANIFEST"
-          else
-            echo "CAMERA permission already exists"
           fi
-          echo "=== After ==="
-          cat $MANIFEST | grep -i permission || true
 
       - name: Build Debug APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          ./gradlew assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: LabelScan-PRO-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 30
