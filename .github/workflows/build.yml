@@ -46,6 +46,7 @@ jobs:
       - name: Copy icons (if exists)
         run: |
           if [ -f "icons/icon-512.png" ]; then
+            echo "Copying icons..."
             for dir in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
               mkdir -p android/app/src/main/res/mipmap-$dir
               cp icons/icon-192.png android/app/src/main/res/mipmap-$dir/ic_launcher.png 2>/dev/null || cp icons/icon-512.png android/app/src/main/res/mipmap-$dir/ic_launcher.png
@@ -54,7 +55,26 @@ jobs:
             mkdir -p android/app/src/main/res/mipmap-xxxhdpi
             cp icons/icon-512.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
             cp icons/icon-512.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+            echo "Icons copied"
+          else
+            echo "No icons folder found, using default icon"
           fi
+
+      - name: Add Camera permission
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          echo "=== Before ==="
+          cat $MANIFEST | grep -i permission || true
+          if ! grep -q "android.permission.CAMERA" "$MANIFEST"; then
+            echo "Adding CAMERA permission..."
+            sed -i '/<manifest/a \    <uses-permission android:name="android.permission.CAMERA" />' "$MANIFEST"
+            sed -i '/<manifest/a \    <uses-feature android:name="android.hardware.camera" android:required="false" />' "$MANIFEST"
+            sed -i '/<manifest/a \    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />' "$MANIFEST"
+          else
+            echo "CAMERA permission already exists"
+          fi
+          echo "=== After ==="
+          cat $MANIFEST | grep -i permission || true
 
       - name: Build Debug APK
         run: |
