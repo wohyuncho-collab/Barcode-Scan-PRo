@@ -1,46 +1,82 @@
 name: Build LabelScan PRO APK
-on: [push, workflow_dispatch]
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with: { node-version: 22 }
-      - uses: actions/setup-java@v5
-        with: { distribution: 'temurin', java-version: '21' }
-      - run: npm install -g @capacitor/cli
-      - run: |
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Install Capacitor + ML Kit (Google)
+        run: |
+          npm install -g @capacitor/cli
           npm init -y
-          npm install @capacitor/core @capacitor/android
+          npm install @capacitor/core @capacitor/android @capacitor-mlkit/barcode-scanning @capacitor/filesystem @capacitor/share
           npx cap init "LabelScan PRO" com.labelscan.pro --web-dir=www
           npx cap add android
-      - run: |
-          mkdir -p www && cp index.html www/index.html
-          npx cap copy android || true
-      - name: Copy icons (force)
+          echo "=== ML Kit installed ==="
+          cat package.json | grep mlkit || true
+
+      - name: Copy web assets
         run: |
-          ls -R icons
+          mkdir -p www
+          mkdir -p android/app/src/main/assets/public
+          cp index.html www/index.html
+          cp index.html android/app/src/main/assets/public/index.html
+          npx cap copy android || true
+          npx cap sync android || true
+
+      - name: Copy icons (force orange)
+        run: |
           if [ -f "icons/icon-512.png" ]; then
             for dir in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
               mkdir -p android/app/src/main/res/mipmap-$dir
               cp -f icons/icon-512.png android/app/src/main/res/mipmap-$dir/ic_launcher.png
               cp -f icons/icon-512.png android/app/src/main/res/mipmap-$dir/ic_launcher_round.png
+              cp -f icons/icon-512.png android/app/src/main/res/mipmap-$dir/ic_launcher_foreground.png 2>/dev/null || true
             done
-            rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+            rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml 2>/dev/null || true
+            rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml 2>/dev/null || true
+            echo "Icons forced"
           else
-            echo "icons/icon-512.png not found!"; exit 1
+            echo "No icons - using default"
           fi
+
       - name: Add Camera permission
         run: |
           MANIFEST=android/app/src/main/AndroidManifest.xml
-          if ! grep -q "CAMERA" "$MANIFEST"; then
+          if ! grep -q "android.permission.CAMERA" "$MANIFEST"; then
             sed -i '/<manifest/a \    <uses-permission android:name="android.permission.CAMERA" />' "$MANIFEST"
+            sed -i '/<manifest/a \    <uses-feature android:name="android.hardware.camera" android:required="false" />' "$MANIFEST"
           fi
-      - run: |
-          cd android && chmod +x gradlew
-          ./gradlew assembleDebug
-      - uses: actions/upload-artifact@v4
+          cat $MANIFEST | grep -i camera || true
+
+      - name: Build Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v5
         with:
           name: LabelScan-PRO-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
